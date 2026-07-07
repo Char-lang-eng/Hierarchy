@@ -11,10 +11,17 @@ const CURRENCIES = [
   { id: "gold", name: "Gold", color: "#f0b429", exchangeRatio: 100000, exchangeTokenCost: 1 },
   { id: "platinum", name: "Platinum", color: "#e5e4e2", exchangeRatio: 1000000, exchangeTokenCost: 1 },
   { id: "crystal", name: "Crystal", color: "#c084fc", exchangeRatio: 10000000, exchangeTokenCost: 1 },
-  { id: "adamant", name: "Adamant", color: "#f87171" },
+  { id: "adamant", name: "Adamant", color: "#f87171", exchangeRatio: 100000000, exchangeTokenCost: 1 },
+  { id: "orichalcum", name: "Orichalcum", color: "#f4a261", exchangeRatio: 1000000000, exchangeTokenCost: 1 },
+  { id: "eternium", name: "Eternium", color: "#c77dff" },
 ];
 
-const NUMBER_SUFFIXES = ["K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+const NUMBER_SUFFIXES = [
+  "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc",
+  "UDc", "DDc", "TDc", "QaDc", "QiDc", "SxDc", "SpDc", "OcDc", "NoDc", "Vg",
+  "UVg", "DVg", "TVg", "QaVg", "QiVg", "SxVg", "SpVg", "OcVg", "NoVg", "Tg",
+  "UTg", "DTg", "TTg", "QaTg", "QiTg", "SxTg", "SpTg", "OcTg", "NoTg", "Qg",
+];
 
 function exchangeRatio(tier) {
   return CURRENCIES[tier].exchangeRatio ?? 0;
@@ -35,8 +42,6 @@ const TOKEN_UPGRADE_EFFECT = 1;
 const BATCH_FRACTION = 0.1;
 
 const PRODUCTION_UPGRADE_MULT = 2;
-const PRODUCTION_UPGRADE_BASE_COST = 1;
-const PRODUCTION_UPGRADE_COST_MULT = 3;
 const PRODUCTION_MILESTONE_BASE = 10;
 const PRODUCTION_MILESTONE_MULT = 10;
 
@@ -53,9 +58,13 @@ const PRESTIGE_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 
 const ACHIEVEMENT_MULT_PER_POINT = 0.1;
 
-const DUST_ACHIEVEMENT_POWERS = 10;
-const STAR_ACHIEVEMENT_POWERS = 5;
-const TOKEN_ACHIEVEMENT_POWERS = 10;
+// Achievement tiers: skip early thresholds, concentrate rewards in midgame.
+const DUST_ACHIEVEMENT_START = 2;
+const DUST_ACHIEVEMENT_COUNT = 10;
+const STAR_ACHIEVEMENT_START = 1;
+const STAR_ACHIEVEMENT_COUNT = 5;
+const TOKEN_ACHIEVEMENT_START = 4;
+const TOKEN_ACHIEVEMENT_COUNT = 8;
 const FIRST_BUY_MINERAL_TIER = 2;
 
 const RESOURCE_BOXES = [
@@ -102,6 +111,9 @@ const shardCountEl = document.getElementById("shard-count");
 const prestigeRowEl = document.getElementById("prestige-row");
 const achievementListEl = document.getElementById("achievement-list");
 const headerAchievementMultEl = document.getElementById("header-achievement-mult");
+const achievementProgressTextEl = document.getElementById("achievement-progress-text");
+const achievementProgressClaimedEl = document.getElementById("achievement-progress-claimed");
+const achievementProgressReadyEl = document.getElementById("achievement-progress-ready");
 
 /** @type {Array<{ amountEl: HTMLElement, productionEl: HTMLElement, boostBtn?: HTMLButtonElement, boostDetail?: HTMLElement, exchangeBtn?: HTMLButtonElement }>} */
 let cards = [];
@@ -328,6 +340,16 @@ function achievementBonusPoints() {
     .reduce((sum, achievement) => sum + achievement.bonusPoints, 0);
 }
 
+function achievementReadyPoints() {
+  return ACHIEVEMENTS
+    .filter((achievement) => isAchievementReady(achievement.id))
+    .reduce((sum, achievement) => sum + achievement.bonusPoints, 0);
+}
+
+function totalAchievementPoints() {
+  return ACHIEVEMENTS.reduce((sum, achievement) => sum + achievement.bonusPoints, 0);
+}
+
 function achievementMultiplier() {
   return 1 + achievementBonusPoints() * ACHIEVEMENT_MULT_PER_POINT;
 }
@@ -474,21 +496,45 @@ function formatCount(n) {
   return formatNum(value);
 }
 
+function dustAchievementBonus(power) {
+  return 1;
+}
+
+function firstBuyBonusPoints(tier) {
+  return tier-1;
+}
+
+function starAchievementBonus(power) {
+  if (power <= 3) return 1;
+  if (power <= 5) return 2;
+  return 3;
+}
+
+function tokenAchievementBonus(power) {
+  if (power <= 6) return 1;
+  if (power <= 9) return 2;
+  return 3;
+}
+
 function buildAchievements() {
   const achievements = [
     { id: "prestige_once", name: "Reborn", desc: "Prestige once", bonusPoints: 1, check: () => state.prestigeCount >= 1 },
+    { id: "prestige_thrice", name: "Ascendant", desc: "Prestige 5 times", bonusPoints: 2, check: () => state.prestigeCount >= 5 },
     { id: "token_upgrades", name: "Token Tapper", desc: "Buy 5 token upgrades", bonusPoints: 1, check: () => state.tokenUpgrades >= 5 },
+    { id: "token_upgrades_50", name: "Token Master", desc: "Buy 50 token upgrades", bonusPoints: 2, check: () => state.tokenUpgrades >= 50 },
     { id: "daily_streak", name: "Regular", desc: "Reach a 3-day login streak", bonusPoints: 2, check: () => state.dailyStreak >= 3 },
-    { id: "open_box", name: "Unboxing", desc: "Open a resource box", bonusPoints: 1, check: () => state.boxesOpened >= 1 },
+    { id: "open_boxes_5", name: "Unboxing", desc: "Open 5 resource boxes", bonusPoints: 1, check: () => state.boxesOpened >= 5 },
+    { id: "open_boxes_25", name: "Crate Digger", desc: "Open 25 resource boxes", bonusPoints: 2, check: () => state.boxesOpened >= 25 },
   ];
 
-  for (let power = 1; power <= DUST_ACHIEVEMENT_POWERS; power++) {
+  for (let i = 0; i < DUST_ACHIEVEMENT_COUNT; i++) {
+    const power = DUST_ACHIEVEMENT_START + i;
     const threshold = Math.pow(1000, power);
     achievements.push({
       id: `dust_collect_${power}`,
-      name: `Dust ${power}`,
+      name: `Dust ${i + 1}`,
       desc: `Collect ${formatCount(threshold)} Dust total`,
-      bonusPoints: 1,
+      bonusPoints: dustAchievementBonus(power),
       check: () => state.lifetimeDustCollected >= threshold,
     });
   }
@@ -499,29 +545,31 @@ function buildAchievements() {
       id: `first_buy_${mineral.id}`,
       name: `First ${mineral.name}`,
       desc: `Buy your first ${mineral.name}`,
-      bonusPoints: tier-1,
+      bonusPoints: firstBuyBonusPoints(tier),
       check: () => state.firstMineralBought[tier],
     });
   }
 
-  for (let power = 1; power <= STAR_ACHIEVEMENT_POWERS; power++) {
+  for (let i = 0; i < STAR_ACHIEVEMENT_COUNT; i++) {
+    const power = STAR_ACHIEVEMENT_START + i;
     const threshold = Math.pow(100, power);
     achievements.push({
       id: `stars_earned_${power}`,
-      name: `Stars ${power}`,
+      name: `Stars ${i + 1}`,
       desc: `Earn ${formatCount(threshold)} stars total`,
-      bonusPoints: 2,
+      bonusPoints: starAchievementBonus(power),
       check: () => state.totalStarsEarned >= threshold,
     });
   }
 
-  for (let power = 3; power <= TOKEN_ACHIEVEMENT_POWERS; power++) {
+  for (let i = 0; i < TOKEN_ACHIEVEMENT_COUNT; i++) {
+    const power = TOKEN_ACHIEVEMENT_START + i;
     const threshold = Math.pow(10, power);
     achievements.push({
       id: `tokens_spent_${power}`,
-      name: `Spend Tokens ${power-2}`,
+      name: `Spend Tokens ${i + 1}`,
       desc: `Spend ${formatCount(threshold)} tokens on exchanges`,
-      bonusPoints: power > 6 ? 2 : 1,
+      bonusPoints: tokenAchievementBonus(power),
       check: () => state.totalTokensSpent >= threshold,
     });
   }
@@ -569,7 +617,13 @@ function productionMilestoneThreshold(tier, level) {
 }
 
 function productionUpgradeCost(tier, nextLevel) {
-  return PRODUCTION_UPGRADE_BASE_COST * Math.pow(PRODUCTION_UPGRADE_COST_MULT, nextLevel - 1) * (tier + 1);
+  if (nextLevel <= 1) return tier + 1;
+
+  let cost = tier + 1;
+  for (let level = 2; level <= nextLevel; level++) {
+    cost *= level + 1;
+  }
+  return cost;
 }
 
 function productionMultiplier(tier) {
@@ -919,12 +973,14 @@ function buildAchievementUI() {
 }
 
 function updateAchievementUI() {
-  if (!achievementListEl) return;
-
   const mult = achievementMultiplier();
   if (headerAchievementMultEl) {
     setText(headerAchievementMultEl, `×${formatNum(mult)}`);
   }
+
+  updateAchievementProgress();
+
+  if (!achievementListEl) return;
 
   achievementListEl.querySelectorAll(".achievement-row").forEach((row) => {
     const achievement = ACHIEVEMENTS.find((entry) => entry.id === row.dataset.achievementId);
@@ -942,10 +998,33 @@ function updateAchievementUI() {
     } else if (ready) {
       reward.textContent = `Ready · +${bonus.toFixed(1)}× · +${shards} ◆`;
     } else {
-      reward.textContent = `+${achievement.bonusPoints} pt · +${bonus.toFixed(1)}× · +${shards} ◆`;
+      reward.textContent = `${achievement.bonusPoints} pt · +${bonus.toFixed(1)}× · +${shards} ◆`;
     }
     if (claimBtn) claimBtn.hidden = !ready;
   });
+}
+
+function updateAchievementProgress() {
+  const claimed = achievementBonusPoints();
+  const ready = achievementReadyPoints();
+  const total = totalAchievementPoints();
+  const remaining = Math.max(total - claimed - ready, 0);
+
+  if (achievementProgressTextEl) {
+    setText(
+      achievementProgressTextEl,
+      `${formatCount(claimed)} collected · ${formatCount(ready)} to claim · ${formatCount(remaining)} remaining`,
+    );
+  }
+
+  const claimedPct = total > 0 ? (claimed / total) * 100 : 0;
+  const readyPct = total > 0 ? (ready / total) * 100 : 0;
+  if (achievementProgressClaimedEl) {
+    setWidth(achievementProgressClaimedEl, `${claimedPct}%`);
+  }
+  if (achievementProgressReadyEl) {
+    setWidth(achievementProgressReadyEl, `${readyPct}%`);
+  }
 }
 
 function setUpgradeBuyBtn(btn, label, detail) {
@@ -1159,8 +1238,8 @@ function updateUI(force = false) {
       setText(
         card.exchangeDetail,
         batch === 0
-          ? `Max ${formatCount(max)} · ${formatNum(ratio)} + ${tokenCost} each`
-          : `Buy ${formatCount(batch)} (${formatCount(max)} max) · ${formatNum(ratio * batch)} + ${formatCount(tokenCost * batch)}`,
+          ? `Max ${formatCount(max)} · ${formatNum(ratio)} + ${formatCount(tokenCost)} token each`
+          : `Buy ${formatCount(batch)} (${formatCount(max)} max) · ${formatNum(ratio * batch)} + ${formatCount(tokenCost * batch)} tokens`,
       );
     }
 
