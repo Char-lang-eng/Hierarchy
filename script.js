@@ -54,7 +54,12 @@ const TOKEN_STAR_UPGRADE_COST_MULT = 4;
 const STARTING_SHARDS = 0;
 const DAILY_SHARD_BASE = 5;
 const CLAIM_STARS_SHARD_COST = 25;
-const PRESTIGE_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+const PRESTIGE_COOLDOWNS_MS = [
+  2 * 60 * 60 * 1000,
+  4 * 60 * 60 * 1000,
+  8 * 60 * 60 * 1000,
+  24 * 60 * 60 * 1000,
+];
 
 const ACHIEVEMENT_MULT_PER_POINT = 0.1;
 
@@ -242,9 +247,15 @@ function resetRunProgress() {
   state.lastTick = Date.now();
 }
 
+function prestigeCooldownMs(completedPrestigeCount) {
+  if (completedPrestigeCount <= 0) return 0;
+  const index = Math.min(completedPrestigeCount - 1, PRESTIGE_COOLDOWNS_MS.length - 1);
+  return PRESTIGE_COOLDOWNS_MS[index];
+}
+
 function prestigeCooldownRemaining() {
   if (!state.lastPrestigeAt) return 0;
-  return Math.max(0, state.lastPrestigeAt + PRESTIGE_COOLDOWN_MS - Date.now());
+  return Math.max(0, state.lastPrestigeAt + prestigeCooldownMs(state.prestigeCount) - Date.now());
 }
 
 function canPrestige() {
@@ -1259,12 +1270,13 @@ function updatePrestigeUI() {
   setText(desc, descText);
 
   setDisabled(prestigeBtn, onCooldown);
+  const nextCooldownSec = Math.ceil(prestigeCooldownMs(state.prestigeCount + 1) / 1000);
   setUpgradeBuyBtn(
     prestigeBtn,
     onCooldown ? "On Cooldown" : "Prestige",
     onCooldown
       ? `Available in ${formatDuration(Math.ceil(cooldownMs / 1000))}`
-      : "Reset run · unlock ✦",
+      : `Reset run · unlock ✦ · ${formatDuration(nextCooldownSec)} cooldown after`,
   );
 
   setDisabled(claimBtn, !canClaim);
