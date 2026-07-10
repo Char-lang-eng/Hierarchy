@@ -1276,7 +1276,7 @@ function updatePrestigeUI() {
     onCooldown ? "On Cooldown" : "Prestige",
     onCooldown
       ? `Available in ${formatDuration(Math.ceil(cooldownMs / 1000))}`
-      : `Reset run · unlock ✦ · ${formatDuration(nextCooldownSec)} cooldown after`,
+      : `Reset run · unlock ✦`,
   );
 
   setDisabled(claimBtn, !canClaim);
