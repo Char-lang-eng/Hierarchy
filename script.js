@@ -93,6 +93,7 @@ const state = {
   boxesOpened: 0,
   lifetimeDustCollected: 0,
   totalTokensSpent: 0,
+  lifetimeTokenUpgrades: 0,
   firstMineralBought: CURRENCIES.map(() => false),
   productionUpgrades: CURRENCIES.map(() => 0),
   unlocked: CURRENCIES.map((_, i) => i === 0),
@@ -142,12 +143,32 @@ function setWidth(el, width) {
 
 function isTierUnlocked(tier) {
   if (tier === 0) return true;
-  return state.firstMineralBought[tier];
+  return state.unlocked[tier];
 }
 
 function markMineralBought(tier) {
-  if (tier <= 0 || state.firstMineralBought[tier]) return;
-  state.firstMineralBought[tier] = true;
+  if (tier <= 0) return;
+  let changed = false;
+  if (!state.firstMineralBought[tier]) {
+    state.firstMineralBought[tier] = true;
+  }
+  if (!state.unlocked[tier]) {
+    state.unlocked[tier] = true;
+    changed = true;
+  }
+  if (changed) {
+    buildUI();
+    buildUpgradeUI();
+    markDirty();
+  }
+}
+
+function resetMineralVisibility() {
+  state.unlocked = CURRENCIES.map((_, i) => {
+    if (i === 0) return true;
+    if (i === 1) return state.firstMineralBought[1];
+    return false;
+  });
 }
 
 function getDayKey(date = new Date()) {
@@ -169,6 +190,10 @@ function nextDailyStreak() {
     return state.dailyStreak + 1;
   }
   return 1;
+}
+
+function isDailyStreakBroken() {
+  return state.lastDailyClaimDay !== null && state.lastDailyClaimDay !== getYesterdayKey();
 }
 
 function nextDailyShardReward() {
@@ -213,7 +238,7 @@ function resetRunProgress() {
   state.tokens = 0;
   state.productionUpgrades = CURRENCIES.map(() => 0);
   state.tokenStarUpgrades = 0;
-  state.unlocked = CURRENCIES.map((_, i) => i === 0);
+  resetMineralVisibility();
   state.lastTick = Date.now();
 }
 
@@ -279,6 +304,19 @@ function formatProductionGrant(seconds) {
   return parts.length > 0 ? parts.join(", ") : "no production yet";
 }
 
+function showNotificationBanner(message, timerKey) {
+  const banner = document.getElementById("offline-banner");
+  if (!banner) return;
+
+  banner.textContent = message;
+  banner.hidden = false;
+
+  clearTimeout(showNotificationBanner[timerKey]);
+  showNotificationBanner[timerKey] = setTimeout(() => {
+    banner.hidden = true;
+  }, 8000);
+}
+
 function showGrantBanner(title, seconds, tokensBefore, amountsBefore) {
   const parts = [];
   const tokenGain = state.tokens - tokensBefore;
@@ -289,30 +327,17 @@ function showGrantBanner(title, seconds, tokensBefore, amountsBefore) {
   }
   if (parts.length === 0) return;
 
-  let banner = document.getElementById("offline-banner");
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "offline-banner";
-    banner.className = "offline-banner";
-    document.body.prepend(banner);
-  }
-
-  banner.textContent = `${title} (${formatDuration(seconds)}): ${parts.join(", ")}`;
-  banner.hidden = false;
-
-  clearTimeout(showGrantBanner._timer);
-  showGrantBanner._timer = setTimeout(() => {
-    banner.hidden = true;
-  }, 8000);
+  showNotificationBanner(
+    `${title} (${formatDuration(seconds)}): ${parts.join(", ")}`,
+    "grantTimer",
+  );
 }
 
 function checkUnlocks() {
   let changed = false;
-  for (let i = 1; i < CURRENCIES.length; i++) {
-    if (!state.unlocked[i] && state.firstMineralBought[i]) {
-      state.unlocked[i] = true;
-      changed = true;
-    }
+  if (!state.unlocked[1] && state.firstMineralBought[1]) {
+    state.unlocked[1] = true;
+    changed = true;
   }
   if (changed) {
     buildUI();
@@ -384,24 +409,10 @@ function claimAchievement(id) {
 
 function showAchievementCompleteBanner(achievements) {
   const summary = achievements.map((achievement) => achievement.name).join(", ");
-
-  let banner = document.getElementById("offline-banner");
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "offline-banner";
-    banner.className = "offline-banner";
-    document.body.prepend(banner);
-  }
-
-  banner.textContent = achievements.length === 1
+  const message = achievements.length === 1
     ? `Achievement complete: ${summary} — claim your reward!`
     : `Achievements complete: ${summary} — claim your rewards!`;
-  banner.hidden = false;
-
-  clearTimeout(showAchievementCompleteBanner._timer);
-  showAchievementCompleteBanner._timer = setTimeout(() => {
-    banner.hidden = true;
-  }, 8000);
+  showNotificationBanner(message, "achievementTimer");
 }
 
 function formatDuration(seconds) {
@@ -516,15 +527,77 @@ function tokenAchievementBonus(power) {
   return 3;
 }
 
+function achievementProgressValue(current, target) {
+  return {
+    current: Math.min(current, target),
+    target,
+  };
+}
+
+function formatAchievementProgress(achievement) {
+  if (isAchievementTracked(achievement.id)) return "Complete";
+  const { current, target } = achievement.progress();
+  return `${formatCount(current)}/${formatCount(target)} complete`;
+}
+
 function buildAchievements() {
   const achievements = [
-    { id: "prestige_once", name: "Reborn", desc: "Prestige once", bonusPoints: 1, check: () => state.prestigeCount >= 1 },
-    { id: "prestige_thrice", name: "Ascendant", desc: "Prestige 5 times", bonusPoints: 2, check: () => state.prestigeCount >= 5 },
-    { id: "token_upgrades", name: "Token Tapper", desc: "Buy 5 token upgrades", bonusPoints: 1, check: () => state.tokenUpgrades >= 5 },
-    { id: "token_upgrades_50", name: "Token Master", desc: "Buy 50 token upgrades", bonusPoints: 2, check: () => state.tokenUpgrades >= 50 },
-    { id: "daily_streak", name: "Regular", desc: "Reach a 3-day login streak", bonusPoints: 2, check: () => state.dailyStreak >= 3 },
-    { id: "open_boxes_5", name: "Unboxing", desc: "Open 5 resource boxes", bonusPoints: 1, check: () => state.boxesOpened >= 5 },
-    { id: "open_boxes_25", name: "Crate Digger", desc: "Open 25 resource boxes", bonusPoints: 2, check: () => state.boxesOpened >= 25 },
+    {
+      id: "prestige_once",
+      name: "Reborn",
+      desc: "Prestige once",
+      bonusPoints: 1,
+      check: () => state.prestigeCount >= 1,
+      progress: () => achievementProgressValue(state.prestigeCount, 1),
+    },
+    {
+      id: "prestige_thrice",
+      name: "Ascendant",
+      desc: "Prestige 5 times",
+      bonusPoints: 2,
+      check: () => state.prestigeCount >= 5,
+      progress: () => achievementProgressValue(state.prestigeCount, 5),
+    },
+    {
+      id: "token_upgrades",
+      name: "Token Tapper",
+      desc: "Buy 5 token upgrades total",
+      bonusPoints: 1,
+      check: () => state.lifetimeTokenUpgrades >= 5,
+      progress: () => achievementProgressValue(state.lifetimeTokenUpgrades, 5),
+    },
+    {
+      id: "token_upgrades_50",
+      name: "Token Master",
+      desc: "Buy 50 token upgrades total",
+      bonusPoints: 2,
+      check: () => state.lifetimeTokenUpgrades >= 50,
+      progress: () => achievementProgressValue(state.lifetimeTokenUpgrades, 50),
+    },
+    {
+      id: "daily_streak",
+      name: "Regular",
+      desc: "Reach a 3-day login streak",
+      bonusPoints: 2,
+      check: () => state.dailyStreak >= 3,
+      progress: () => achievementProgressValue(state.dailyStreak, 3),
+    },
+    {
+      id: "open_boxes_5",
+      name: "Unboxing",
+      desc: "Open 5 resource boxes",
+      bonusPoints: 1,
+      check: () => state.boxesOpened >= 5,
+      progress: () => achievementProgressValue(state.boxesOpened, 5),
+    },
+    {
+      id: "open_boxes_25",
+      name: "Crate Digger",
+      desc: "Open 25 resource boxes",
+      bonusPoints: 2,
+      check: () => state.boxesOpened >= 25,
+      progress: () => achievementProgressValue(state.boxesOpened, 25),
+    },
   ];
 
   for (let i = 0; i < DUST_ACHIEVEMENT_COUNT; i++) {
@@ -536,6 +609,7 @@ function buildAchievements() {
       desc: `Collect ${formatCount(threshold)} Dust total`,
       bonusPoints: dustAchievementBonus(power),
       check: () => state.lifetimeDustCollected >= threshold,
+      progress: () => achievementProgressValue(state.lifetimeDustCollected, threshold),
     });
   }
 
@@ -547,6 +621,7 @@ function buildAchievements() {
       desc: `Buy your first ${mineral.name}`,
       bonusPoints: firstBuyBonusPoints(tier),
       check: () => state.firstMineralBought[tier],
+      progress: () => achievementProgressValue(state.firstMineralBought[tier] ? 1 : 0, 1),
     });
   }
 
@@ -559,6 +634,7 @@ function buildAchievements() {
       desc: `Earn ${formatCount(threshold)} stars total`,
       bonusPoints: starAchievementBonus(power),
       check: () => state.totalStarsEarned >= threshold,
+      progress: () => achievementProgressValue(state.totalStarsEarned, threshold),
     });
   }
 
@@ -571,6 +647,7 @@ function buildAchievements() {
       desc: `Spend ${formatCount(threshold)} tokens on exchanges`,
       bonusPoints: tokenAchievementBonus(power),
       check: () => state.totalTokensSpent >= threshold,
+      progress: () => achievementProgressValue(state.totalTokensSpent, threshold),
     });
   }
 
@@ -754,6 +831,7 @@ function buyTokenUpgrade() {
   if (!canAfford(state.amounts[0], cost)) return;
   state.amounts[0] -= cost;
   state.tokenUpgrades += 1;
+  state.lifetimeTokenUpgrades += 1;
   earnStars(rollTokenUpgradeStars(state.tokenUpgrades));
   markDirty();
   updateUI(true);
@@ -911,12 +989,21 @@ function updateDailyClaimUI() {
   if (!dailyClaimRowEl) return;
 
   const canClaim = canClaimDaily();
-  const reward = nextDailyShardReward();
+  const nextStreak = nextDailyStreak();
+  const reward = DAILY_SHARD_BASE * nextStreak;
   const desc = dailyClaimRowEl.querySelector(".box-desc");
   const btn = dailyClaimRowEl.querySelector(".daily-claim-btn");
 
   if (canClaim) {
-    setText(desc, `Streak: ${state.dailyStreak} · Claim ${formatCount(reward)} ◆ (${formatCount(DAILY_SHARD_BASE)} × day ${formatCount(nextDailyStreak())})`);
+    const streakText = state.lastDailyClaimDay === null
+      ? "Starting streak"
+      : isDailyStreakBroken()
+        ? "Streak lost"
+        : `Streak: ${formatCount(state.dailyStreak)}`;
+    setText(
+      desc,
+      `${streakText} · Claim ${formatCount(reward)} ◆ (${formatCount(DAILY_SHARD_BASE)} × day ${formatCount(nextStreak)})`,
+    );
     setDisabled(btn, false);
     setUpgradeBuyBtn(btn, "Daily Claim", `${formatCount(reward)} ◆`);
   } else {
@@ -957,6 +1044,7 @@ function buildAchievementUI() {
       <div class="achievement-info">
         <h3>${achievement.name}</h3>
         <p class="achievement-desc">${achievement.desc}</p>
+        <p class="achievement-progress-detail"></p>
       </div>
       <div class="achievement-actions">
         <span class="achievement-reward"></span>
@@ -993,6 +1081,10 @@ function updateAchievementUI() {
     const shards = formatCount(achievement.bonusPoints);
     const reward = row.querySelector(".achievement-reward");
     const claimBtn = row.querySelector(".achievement-claim-btn");
+    const progressEl = row.querySelector(".achievement-progress-detail");
+    if (progressEl) {
+      setText(progressEl, formatAchievementProgress(achievement));
+    }
     if (claimed) {
       reward.textContent = `+${bonus.toFixed(1)}× · +${shards} ◆`;
     } else if (ready) {
@@ -1275,6 +1367,7 @@ function save() {
     boxesOpened: state.boxesOpened,
     lifetimeDustCollected: state.lifetimeDustCollected,
     totalTokensSpent: state.totalTokensSpent,
+    lifetimeTokenUpgrades: state.lifetimeTokenUpgrades,
     firstMineralBought: state.firstMineralBought,
     productionUpgrades: state.productionUpgrades,
     tokenStarUpgrades: state.tokenStarUpgrades,
@@ -1305,6 +1398,11 @@ function load() {
     if (data.amounts?.length) state.amounts = loadArray(data.amounts, CURRENCIES.length);
     if (data.boosters?.length) state.boosters = loadArray(data.boosters, CURRENCIES.length);
     if (typeof data.tokenUpgrades === "number") state.tokenUpgrades = data.tokenUpgrades;
+    if (typeof data.lifetimeTokenUpgrades === "number") {
+      state.lifetimeTokenUpgrades = data.lifetimeTokenUpgrades;
+    } else {
+      state.lifetimeTokenUpgrades = state.tokenUpgrades;
+    }
     if (typeof data.tokens === "number") state.tokens = data.tokens;
     if (typeof data.inactiveStars === "number") {
       state.inactiveStars = data.inactiveStars;
@@ -1346,7 +1444,9 @@ function load() {
       state.unlocked = loadBoolArray(data.unlocked, CURRENCIES.length, (i) => i === 0);
     }
     for (let i = 1; i < CURRENCIES.length; i++) {
-      if (state.firstMineralBought[i]) state.unlocked[i] = true;
+      if (state.firstMineralBought[i] && (i === 1 || state.amounts[i] > 0)) {
+        state.unlocked[i] = true;
+      }
     }
     if (data.productionUpgrades?.length) {
       state.productionUpgrades = loadArray(data.productionUpgrades, CURRENCIES.length);
@@ -1382,6 +1482,7 @@ function reset() {
   state.boxesOpened = 0;
   state.lifetimeDustCollected = 0;
   state.totalTokensSpent = 0;
+  state.lifetimeTokenUpgrades = 0;
   state.firstMineralBought = CURRENCIES.map(() => false);
   state.productionUpgrades = CURRENCIES.map(() => 0);
   state.tokenStarUpgrades = 0;
